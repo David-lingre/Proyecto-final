@@ -7,6 +7,14 @@ import com.granjapro.dominio.excepciones.GranjaException;
 import com.granjapro.aplicacion.servicios.ServicioGestionLotes;
 import com.granjapro.aplicacion.servicios.ServicioProduccion;
 import com.granjapro.aplicacion.servicios.ServicioAnalitica;
+
+// 🔐 NUEVOS IMPORTS DE SEGURIDAD
+import com.granjapro.aplicacion.servicios.ServicioSeguridad;
+import com.granjapro.aplicacion.sesion.SesionGlobal;
+import com.granjapro.dominio.modelos.Usuario;
+import com.granjapro.dominio.repositorios.RepositorioUsuario;
+import com.granjapro.infraestructura.persistencia.mongo.RepositorioUsuarioMongo;
+
 import com.granjapro.infraestructura.persistencia.mongo.RepositorioLoteMongo;
 import com.granjapro.infraestructura.persistencia.mongo.RepositorioRegistroProduccionMongo;
 import com.granjapro.infraestructura.persistencia.mongo.RepositorioAuditoriaMongo;
@@ -43,6 +51,9 @@ public class ConsolaUi {
     private ServicioGestionLotes servicioGestionLotes;
     private ServicioProduccion servicioProduccion;
     private ServicioAnalitica servicioAnalitica;
+
+    // 🔐 NUEVO: servicio de seguridad
+    private ServicioSeguridad servicioSeguridad;
     
     /**
      * Constructor que inicializa la interfaz con los servicios.
@@ -71,6 +82,11 @@ public class ConsolaUi {
             new RepositorioRegistroProduccionMongo(),
             new RepositorioAlertaMongo(coleccionAlertas)
         );
+
+        // 🔐 NUEVO: inicializar seguridad (repositorio de usuarios + servicio)
+        MongoCollection<Document> coleccionUsuarios = db.getCollection("usuarios");
+        RepositorioUsuario repositorioUsuario = new RepositorioUsuarioMongo(coleccionUsuarios);
+        this.servicioSeguridad = new ServicioSeguridad(repositorioUsuario);
     }
     
     /**
@@ -85,19 +101,38 @@ public class ConsolaUi {
             String opcion = scanner.nextLine().trim();
             
             try {
-                switch (opcion) {
-                    case "1":
-                        menuGestionLotes();
-                        break;
-                    case "2":
-                        menuProduccion();
-                        break;
-                    case "3":
-                        salir = true;
-                        mostrarDespedida();
-                        break;
-                    default:
-                        mostrarError("Opción no válida. Por favor, intenta de nuevo.");
+                // 🔐 MENÚ DIFERENTE SEGÚN EL ROL
+                if (SesionGlobal.get().esAdmin()) {
+                    // ADMIN: puede ver Gestión de Lotes y Producción
+                    switch (opcion) {
+                        case "1":
+                            menuGestionLotes();
+                            break;
+                        case "2":
+                            menuProduccion();
+                            break;
+                        case "3":
+                            salir = true;
+                            cerrarSesion();
+                            mostrarDespedida();
+                            break;
+                        default:
+                            mostrarError("Opción no válida. Por favor, intenta de nuevo.");
+                    }
+                } else {
+                    // OPERARIO: solo Registro de Producción
+                    switch (opcion) {
+                        case "1":
+                            menuProduccion();
+                            break;
+                        case "2":
+                            salir = true;
+                            cerrarSesion();
+                            mostrarDespedida();
+                            break;
+                        default:
+                            mostrarError("Opción no válida. Por favor, intenta de nuevo.");
+                    }
                 }
             } catch (GranjaException e) {
                 mostrarErrorGranja(e);
@@ -131,14 +166,62 @@ public class ConsolaUi {
      * Muestra el menú principal.
      */
     private void mostrarMenuPrincipal() {
+        boolean esAdmin = SesionGlobal.get().esAdmin();
+        String nombreUsuario = SesionGlobal.get().obtenerNombreUsuario();
+        
         System.out.println(ANSI_BLUE + "┌─ MENÚ PRINCIPAL " + "─".repeat(40) + "┐" + ANSI_RESET);
+        System.out.println("│ Usuario: " + nombreUsuario);
+        System.out.println("│ Rol: " + (esAdmin ? "ADMIN" : "OPERARIO"));
         System.out.println("│");
-        System.out.println("│  1. Gestión de Lotes");
-        System.out.println("│  2. Registro de Producción");
-        System.out.println("│  3. Salir");
+        
+        if (esAdmin) {
+            System.out.println("│  1. Gestión de Lotes");
+            System.out.println("│  2. Registro de Producción");
+            System.out.println("│  3. Cerrar sesión y salir");
+        } else {
+            System.out.println("│  1. Registro de Producción");
+            System.out.println("│  2. Cerrar sesión y salir");
+        }
+        
         System.out.println("│");
         System.out.println(ANSI_BLUE + "└" + "─".repeat(57) + "┘" + ANSI_RESET);
         System.out.print(ANSI_YELLOW + "Selecciona una opción: " + ANSI_RESET);
+    }
+
+    // 🔐 NUEVO: pantalla de login antes de entrar al menú
+    private void mostrarLogin() {
+        boolean logueado = false;
+
+        while (!logueado) {
+            limpiarPantalla();
+            System.out.println(ANSI_CYAN + "╔════════════════════════════════════════════╗" + ANSI_RESET);
+            System.out.println(ANSI_CYAN + "║          AUTENTICACIÓN GRANJAPRO          ║" + ANSI_RESET);
+            System.out.println(ANSI_CYAN + "╚════════════════════════════════════════════╝" + ANSI_RESET);
+            System.out.println();
+            
+            System.out.print("Usuario: ");
+            String usuario = scanner.nextLine().trim();
+            
+            System.out.print("Contraseña: ");
+            String password = scanner.nextLine().trim();
+            
+            try {
+                Usuario usuarioLogueado = servicioSeguridad.login(usuario, password);
+                System.out.println();
+                mostrarExito("Bienvenido, " + usuarioLogueado.getNombre());
+                logueado = true;
+                
+                System.out.println();
+                System.out.print("Presiona ENTER para continuar...");
+                scanner.nextLine();
+            } catch (Exception e) {
+                mostrarError(e.getMessage());
+                System.out.println("Intenta de nuevo.");
+                System.out.println();
+                System.out.print("Presiona ENTER para continuar...");
+                scanner.nextLine();
+            }
+        }
     }
     
     // ==================== MENÚ GESTIÓN LOTES ====================
@@ -514,12 +597,28 @@ public class ConsolaUi {
             System.out.println();
         }
     }
+
+    // 🔐 NUEVO: cerrar sesión limpiando SesionGlobal
+    private void cerrarSesion() {
+        String nombre = SesionGlobal.get().obtenerNombreUsuario();
+        System.out.println();
+        System.out.println("Cerrando sesión de: " + nombre);
+        servicioSeguridad.logout();
+        System.out.println("Sesión cerrada.");
+    }
     
     /**
      * Método principal para ejecutar la aplicación.
      */
     public static void main(String[] args) {
         ConsolaUi ui = new ConsolaUi();
-        ui.iniciar();
+
+        // 🔐 Primero pedimos login
+        ui.mostrarLogin();
+
+        // Solo iniciamos el menú si hay alguien logueado
+        if (SesionGlobal.get().estaLogueado()) {
+            ui.iniciar();
+        }
     }
 }
